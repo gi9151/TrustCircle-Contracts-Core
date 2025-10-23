@@ -142,3 +142,4 @@ describe("TrustCircle Core", function () {
     });
   });
 });
+
