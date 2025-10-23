@@ -1,0 +1,26 @@
+{
+  "name": "trustcircle-contracts",
+  "version": "1.0.0",
+  "description": "Cross-chain mutual trust circles with privacy - ETHGlobal Online",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:core": "hardhat run scripts/deploy-core.js --network localhost",
+    "deploy:scroll": "hardhat run scripts/deploy-core.js --network scrollSepolia",
+    "node": "hardhat node",
+    "clean": "hardhat clean"
+  },
+  "keywords": ["blockchain", "defi", "trust", "cross-chain", "avail", "paypal"],
+  "author": "Tu Nombre",
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^1.0.0",
+    "hardhat": "^2.19.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.9.0",
+    "@semaphore-protocol/contracts": "^3.3.0",
+    "dotenv": "^16.0.0"
+  }
+}
