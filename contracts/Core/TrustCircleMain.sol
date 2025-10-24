@@ -90,7 +90,7 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
 
     // Funciones de miembros
     function join(uint256 amount, uint256 zkCommitment) 
-        external 
+        public  
         policyActive 
         nonReentrant 
     {

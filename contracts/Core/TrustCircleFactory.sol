@@ -6,59 +6,53 @@ import "../Semaphore/TrustCircleSemaphore.sol";
 
 contract TrustCircleFactory {
     address public semaphoreAddress;
-    address[] public deployedCircles;
+    address[] public allCircles;
     
-    event CircleCreated(address indexed circleAddress, address indexed admin, address asset, bool withSemaphore);
-    
+    event CircleCreated(address indexed circleAddress, bool withSemaphore);
+
     constructor(address _semaphoreAddress) {
         semaphoreAddress = _semaphoreAddress;
     }
-    
+
     function createTrustCircle(
-        address _admin,
-        address _asset,
-        uint256 _policyEnd,
-        uint256 _coPayBps,
-        uint256 _perClaimCap,
-        uint256 _coverageLimitTotal,
-        bool _withSemaphore
+        address admin,
+        address asset,
+        uint256 policyEnd,
+        uint256 coPayBps,
+        uint256 perClaimCap,
+        uint256 coverageLimitTotal,
+        bool withSemaphore
     ) external returns (address) {
         address circle;
         
-        if (_withSemaphore && semaphoreAddress != address(0)) {
-            // Crear círculo con Semaphore
+        if (withSemaphore) {
             circle = address(new TrustCircleSemaphore(
-                semaphoreAddress,
-                _admin,
-                _asset,
-                _policyEnd,
-                _coPayBps,
-                _perClaimCap,
-                _coverageLimitTotal
+                semaphoreAddress,    
+                admin,              
+                asset,               
+                policyEnd,         
+                coPayBps,           
+                perClaimCap,        
+                coverageLimitTotal, 
+                false               
             ));
         } else {
-            // Crear círculo básico
             circle = address(new TrustCircleMain(
-                _admin,
-                _asset,
-                _policyEnd,
-                _coPayBps,
-                _perClaimCap,
-                _coverageLimitTotal
+                admin,
+                asset,
+                policyEnd,
+                coPayBps,
+                perClaimCap,
+                coverageLimitTotal
             ));
         }
         
-        deployedCircles.push(circle);
-        emit CircleCreated(circle, _admin, _asset, _withSemaphore);
-        
+        allCircles.push(circle);
+        emit CircleCreated(circle, withSemaphore);
         return circle;
     }
-    
-    function getDeployedCircles() external view returns (address[] memory) {
-        return deployedCircles;
-    }
-    
-    function getCircleCount() external view returns (uint256) {
-        return deployedCircles.length;
+
+    function getCirclesCount() external view returns (uint256) {
+        return allCircles.length;
     }
 }

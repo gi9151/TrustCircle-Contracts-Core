@@ -1,28 +1,38 @@
 {
   "name": "trustcircle-contracts",
   "version": "1.0.0",
-  "description": "",
+  "description": "Cross-chain mutual trust circles with privacy - ETHGlobal Online",
   "main": "index.js",
-  "directories": {
-    "test": "test"
-  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:core": "hardhat run scripts/deploy-core.js --network localhost",
+    "deploy:semaphore": "hardhat run scripts/deploy-semaphore.js --network localhost",
+    "deploy:scroll": "hardhat run scripts/deploy-core.js --network scrollSepolia",
+    "node": "hardhat node",
+    "clean": "hardhat clean",
+    "test:semaphore": "hardhat test test/test-semaphore.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "blockchain",
+    "defi",
+    "trust",
+    "cross-chain",
+    "avail",
+    "paypal",
+    "ethglobal",
+    "semaphore",
+    "zk"
+  ],
+  "author": "Ingrid Favio",
+  "license": "MIT",
   "devDependencies": {
-    "@nomicfoundation/hardhat-network-helpers": "^1.1.0",
-    "@nomicfoundation/hardhat-toolbox": "^1.0.2",
-    "@types/node": "^24.9.1",
-    "hardhat": "^2.26.3",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "@nomicfoundation/hardhat-toolbox": "^1.0.0",
+    "hardhat": "^2.19.0"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^4.9.6",
-    "@semaphore-protocol/contracts": "^3.15.2",
-    "dotenv": "^16.6.1"
+    "@semaphore-protocol/contracts": "^4.13.2",
+    "dotenv": "^16.0.0"
   }
 }

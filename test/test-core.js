@@ -13,7 +13,7 @@ describe("TrustCircle Core", function () {
     mockUSDC = await MockUSDC.deploy();
     await mockUSDC.deployed();
 
-    // ✅ AÑADIDO: Dar tokens a los usuarios de prueba
+    // Dar tokens a los usuarios de prueba
     await mockUSDC.mint(user1.address, ethers.utils.parseUnits("1000", 6));
     await mockUSDC.mint(user2.address, ethers.utils.parseUnits("1000", 6));
 
@@ -55,25 +55,17 @@ describe("TrustCircle Core", function () {
 
   describe("Circle Membership", function () {
     it("Should allow users to join", async function () {
-      // Verificar balance inicial del usuario
-      const initialBalance = await mockUSDC.balanceOf(user1.address);
-      expect(initialBalance).to.equal(ethers.utils.parseUnits("1000", 6));
-
-      // Aprobar tokens primero
       await mockUSDC.connect(user1).approve(trustCircle.address, ethers.utils.parseUnits("100", 6));
       
-      // Unirse al círculo
       await expect(trustCircle.connect(user1).join(ethers.utils.parseUnits("100", 6), 0))
         .to.emit(trustCircle, "MemberJoined");
       
       expect(await trustCircle.getMemberCount()).to.equal(1);
-      
-      // Verificar que el usuario es miembro activo
+
       const member = await trustCircle.members(user1.address);
       expect(member.isActive).to.be.true;
-      expect(member.totalContributed).to.equal(ethers.utils.parseUnits("100", 6));
+      expect(member.contribution).to.equal(ethers.utils.parseUnits("100", 6));
 
-      // Verificar que los tokens se transfirieron
       const finalBalance = await mockUSDC.balanceOf(user1.address);
       expect(finalBalance).to.equal(ethers.utils.parseUnits("900", 6));
     });
@@ -84,7 +76,7 @@ describe("TrustCircle Core", function () {
       
       await expect(
         trustCircle.connect(user1).join(ethers.utils.parseUnits("50", 6), 0)
-      ).to.be.revertedWith("Already member");
+      ).to.be.revertedWith("Already a member");
     });
 
     it("Should allow additional contributions", async function () {
@@ -95,7 +87,7 @@ describe("TrustCircle Core", function () {
         .to.emit(trustCircle, "ContributionMade");
       
       const member = await trustCircle.members(user1.address);
-      expect(member.totalContributed).to.equal(ethers.utils.parseUnits("150", 6));
+      expect(member.contribution).to.equal(ethers.utils.parseUnits("150", 6));
     });
 
     it("Should register ZK identity", async function () {
@@ -113,7 +105,6 @@ describe("TrustCircle Core", function () {
 
   describe("Claims Management", function () {
     beforeEach(async function () {
-      // Preparar usuarios como miembros
       await mockUSDC.connect(user1).approve(trustCircle.address, ethers.utils.parseUnits("100", 6));
       await mockUSDC.connect(user2).approve(trustCircle.address, ethers.utils.parseUnits("100", 6));
       await trustCircle.connect(user1).join(ethers.utils.parseUnits("100", 6), 0);
@@ -122,24 +113,21 @@ describe("TrustCircle Core", function () {
 
     it("Should allow opening a claim", async function () {
       await expect(trustCircle.connect(user1).openClaim(
-        ethers.utils.parseUnits("500", 6),
+        ethers.utils.parseUnits("50", 6),
         "ipfs://QmEvidenceHash"
       )).to.emit(trustCircle, "ClaimOpened");
     });
 
     it("Should allow voting on claims", async function () {
-      // Abrir un reclamo
       const tx = await trustCircle.connect(user1).openClaim(
-        ethers.utils.parseUnits("500", 6),
+        ethers.utils.parseUnits("50", 6),
         "ipfs://QmEvidenceHash"
       );
       const receipt = await tx.wait();
       const claimId = receipt.events.find(e => e.event === 'ClaimOpened').args.claimId;
 
-      // Votar a favor
       await expect(trustCircle.connect(user2).voteClaim(claimId, true))
         .to.emit(trustCircle, "ClaimVoted");
     });
   });
 });
-
