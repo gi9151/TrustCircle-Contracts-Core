@@ -1,35 +1,77 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.23;
 
-import "./TrustCircleMembers.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
 
 /**
- * @title TrustCircleMain
- * @dev Contrato principal para círculos de confianza
+ * @title TrustCircle
+ * @dev Contrato  para gestión de miembros y reclamos
  */
-contract TrustCircleMain is TrustCircleMembers {
-    // Eventos
-    event ClaimOpened(uint256 indexed claimId, address indexed beneficiary, uint256 amount, uint8 tier);
-    event ClaimVoted(uint256 indexed claimId, address indexed voter, bool approve);
-    event ClaimFinalized(uint256 indexed claimId, uint8 status);
-    event ClaimPaid(uint256 indexed claimId, address indexed beneficiary, uint256 amount);
-    event RefundIssued(address indexed member, uint256 amount);
+contract TrustCircleMain is ReentrancyGuard, Ownable {
+    using Counters for Counters.Counter;
 
-    // Umbrales para niveles de riesgo //
-    uint256 public constant LOW_TIER_THRESHOLD = 100 * 10**6;
-    uint256 public constant MEDIUM_TIER_THRESHOLD = 500 * 10**6;
+    // Estructuras
+    struct Member {
+        bool isActive;
+        uint256 contribution;
+        uint256 joinedAt;
+        uint256 zkIdentityCommitment;
+    }
 
+    struct Claim {
+        address claimant;
+        uint256 amount;
+        uint256 openedAt;
+        uint8 status; // 0 = pending, 1 = approved, 2 = rejected
+        uint256 votesFor;
+        uint256 votesAgainst;
+        string evidence;
+    }
+
+    // Variables básicas
+    IERC20 public asset;
+    uint256 public policyEnd;
+    uint256 public coPayBps;
+    uint256 public perClaimCap;
+    uint256 public coverageLimitTotal;
+    uint256 public minContribution = 100 * 10**6;
+
+    // Contadores
+    Counters.Counter private _claimIds;
+    mapping(address => Member) public members;
+    mapping(uint256 => Claim) public claims;
     mapping(uint256 => bool) public usedNullifiers;
+    address[] public memberList;
+
+    uint256 public totalMembers;
+    uint256 public totalPool;
+    uint256 public totalContributions;
     uint256 public zkVoteCounter;
 
-    // Parámetros de votación por nivel de riesgo //
-    struct TierParams {
-        uint256 quorumBps;
-        uint256 approvalBps;
-    }
-    
-    mapping(uint8 => TierParams) public tierParams;
+    // Eventos
+    event MemberJoined(address indexed member, uint256 amount, uint256 zkIdentityCommitment);
+    event ContributionMade(address indexed member, uint256 amount);
+    event ClaimOpened(uint256 indexed claimId, address indexed claimant, uint256 amount);
+    event ClaimVoted(uint256 indexed claimId, address indexed voter, bool approved);
+    event ClaimProcessed(uint256 indexed claimId, uint8 status);
+    event ZKIdentityRegistered(address indexed member, uint256 commitment);
 
+    // Modifiers
+    modifier policyActive() {
+        require(block.timestamp < policyEnd, "Policy expired");
+        _;
+    }
+
+    modifier onlyMember() {
+        require(members[msg.sender].isActive, "Not a member");
+        _;
+    }
+
+ 
+    // Constructor
     constructor(
         address _admin,
         address _asset,
@@ -37,116 +79,138 @@ contract TrustCircleMain is TrustCircleMembers {
         uint256 _coPayBps,
         uint256 _perClaimCap,
         uint256 _coverageLimitTotal
-    ) TrustCircleMembers(_admin, _asset, _policyEnd, _coPayBps, _perClaimCap, _coverageLimitTotal) {
-        // Configurar parámetros de votación //
-        tierParams[0] = TierParams(6000, 7000);   // Low: 60% quorum, 70% approval //
-        tierParams[1] = TierParams(7000, 8000);   // Medium: 70% quorum, 80% approval // 
-        tierParams[2] = TierParams(8000, 8000);   // High: 80% quorum, 80% approval //
+    ) {
+        asset = IERC20(_asset);
+        policyEnd = _policyEnd;
+        coPayBps = _coPayBps;
+        perClaimCap = _perClaimCap;
+        coverageLimitTotal = _coverageLimitTotal;
+        _transferOwnership(_admin);
     }
 
-    function openClaim(uint256 amount, string calldata evidenceURI) external onlyMember policyActive returns (uint256) {
-        require(amount > 0 && amount <= perClaimCap, "Invalid amount");
-        require(totalCovered + amount <= coverageLimitTotal, "Exceeds total limit");
-        
-        uint256 claimId = claimCounter++;
-        Claim storage newClaim = claims[claimId];
-        
-        newClaim.beneficiary = msg.sender;
-        newClaim.amount = amount;
-        newClaim.evidenceURI = evidenceURI;
-        newClaim.createdAt = block.timestamp;
-        newClaim.status = 0; // Pending
-        newClaim.tier = _determineRiskTier(amount);
-        
-        emit ClaimOpened(claimId, msg.sender, amount, newClaim.tier);
+    // Funciones de miembros
+    function join(uint256 amount, uint256 zkCommitment) 
+        external 
+        policyActive 
+        nonReentrant 
+    {
+        require(!members[msg.sender].isActive, "Already a member");
+        require(amount >= minContribution, "Amount below minimum");
+
+        bool success = asset.transferFrom(msg.sender, address(this), amount);
+        require(success, "Transfer failed");
+
+        members[msg.sender] = Member({
+            isActive: true,
+            contribution: amount,
+            joinedAt: block.timestamp,
+            zkIdentityCommitment: zkCommitment
+        });
+
+        memberList.push(msg.sender);
+        totalMembers++;
+        totalPool += amount;
+        totalContributions += amount;
+
+        emit MemberJoined(msg.sender, amount, zkCommitment);
+
+        if (zkCommitment != 0) {
+            emit ZKIdentityRegistered(msg.sender, zkCommitment);
+        }
+    }
+
+    function contribute(uint256 amount) 
+        external 
+        onlyMember 
+        policyActive 
+        nonReentrant 
+    {
+        require(amount > 0, "Amount must be > 0");
+
+        bool success = asset.transferFrom(msg.sender, address(this), amount);
+        require(success, "Transfer failed");
+
+        members[msg.sender].contribution += amount;
+        totalPool += amount;
+        totalContributions += amount;
+
+        emit ContributionMade(msg.sender, amount);
+    }
+
+    function registerZKIdentity(uint256 zkCommitment) external onlyMember {
+        require(zkCommitment != 0, "Invalid commitment");
+        members[msg.sender].zkIdentityCommitment = zkCommitment;
+        emit ZKIdentityRegistered(msg.sender, zkCommitment);
+    }
+
+    function getMemberCount() external view returns (uint256) {
+        return memberList.length;
+    }
+
+    function getMember(address member) external view returns (Member memory) {
+        return members[member];
+    }
+
+    // Funciones de reclamos
+    function openClaim(uint256 amount, string memory evidence) 
+        external 
+        onlyMember 
+        policyActive 
+        returns (uint256) 
+    {
+        require(amount <= perClaimCap, "Exceeds per-claim cap");
+
+        _claimIds.increment();
+        uint256 claimId = _claimIds.current();
+
+        claims[claimId] = Claim({
+            claimant: msg.sender,
+            amount: amount,
+            openedAt: block.timestamp,
+            status: 0,
+            votesFor: 0,
+            votesAgainst: 0,
+            evidence: evidence
+        });
+
+        emit ClaimOpened(claimId, msg.sender, amount);
         return claimId;
     }
 
     function voteClaim(uint256 claimId, bool approve) external onlyMember {
         Claim storage claim = claims[claimId];
         require(claim.status == 0, "Claim not pending");
-        require(!hasVoted[claimId][msg.sender], "Already voted");
-        require(claim.beneficiary != msg.sender, "Cannot vote own claim");
-        
-        hasVoted[claimId][msg.sender] = true;
-        
+
         if (approve) {
             claim.votesFor++;
         } else {
             claim.votesAgainst++;
         }
-        
+
         emit ClaimVoted(claimId, msg.sender, approve);
     }
 
-    function finalizeClaim(uint256 claimId) external nonReentrant {
+    function processClaim(uint256 claimId) external onlyOwner nonReentrant {
         Claim storage claim = claims[claimId];
-        require(claim.status == 0, "Claim not pending");
-        
-        uint256 totalVotes = claim.votesFor + claim.votesAgainst;
-        uint256 totalMembers = memberList.length;
-        
-        TierParams memory params = tierParams[claim.tier];
-        uint256 quorumNeeded = (totalMembers * params.quorumBps) / 10000;
-        require(totalVotes >= quorumNeeded, "Quorum not reached");
-        
-        uint256 approvalNeeded = (totalVotes * params.approvalBps) / 10000;
-        
-        if (claim.votesFor >= approvalNeeded) {
-            claim.status = 1; // Approved
-            _payClaim(claimId);
+        require(claim.status == 0, "Claim already processed");
+
+        if (claim.votesFor > claim.votesAgainst) {
+            claim.status = 1;
+            uint256 copayAmount = (claim.amount * coPayBps) / 10000;
+            uint256 payoutAmount = claim.amount - copayAmount;
+
+            bool success = asset.transfer(claim.claimant, payoutAmount);
+            require(success, "Transfer failed");
+
+            totalPool -= payoutAmount;
         } else {
-            claim.status = 2; // Rejected
+            claim.status = 2;
         }
-        
-        emit ClaimFinalized(claimId, claim.status);
+
+        emit ClaimProcessed(claimId, claim.status);
     }
 
-    function _payClaim(uint256 claimId) internal {
-        Claim storage claim = claims[claimId];
-        require(claim.status == 1, "Claim not approved");
-        
-        uint256 amount = claim.amount;
-        uint256 copay = 0;
-
-        if (coPayBps > 0) {
-            copay = (amount * coPayBps) / 10000;
-            amount -= copay;
-        }
-        
-        require(asset.balanceOf(address(this)) >= amount, "Insufficient funds");
-        
-        claim.status = 3; // Paid
-        totalCovered += amount;
-        
-        require(asset.transfer(claim.beneficiary, amount), "Payment failed");
-        emit ClaimPaid(claimId, claim.beneficiary, amount);
-    }
-
-    function refundProRata() external onlyMember nonReentrant {
-        require(block.timestamp >= policyEnd, "Policy active");
-        
-        Member storage member = members[msg.sender];
-        require(member.totalContributed > 0, "No contributions");
-        
-        uint256 remainingFunds = asset.balanceOf(address(this));
-        uint256 memberShare = (remainingFunds * member.totalContributed) / totalContributions;
-        
-        member.totalContributed = 0;
-        
-        if (memberShare > 0) {
-            require(asset.transfer(msg.sender, memberShare), "Refund failed");
-            emit RefundIssued(msg.sender, memberShare);
-        }
-    }
-
-    function _determineRiskTier(uint256 amount) internal pure returns (uint8) {
-        if (amount < LOW_TIER_THRESHOLD) return 0;
-        else if (amount < MEDIUM_TIER_THRESHOLD) return 1;
-        else return 2;
-    }
-
-    function getCircleBalance() external view returns (uint256) {
-        return asset.balanceOf(address(this));
+    function getClaim(uint256 claimId) external view returns (Claim memory) {
+        return claims[claimId];
     }
 }
