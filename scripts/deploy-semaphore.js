@@ -7,14 +7,14 @@ async function main() {
   console.log("Desplegando con:", deployer.address);
 
   // Configuración
-  const useRealSemaphore = false; // Cambiar a true para testnet
+  const useRealSemaphore = false; // Cambiamos a true para testnet
   
   let semaphoreAddress;
   if (useRealSemaphore) {
-    // Para testnet - dirección de Semaphore en Scroll
+    // Para testnet / dirección de Semaphore en Scroll
     semaphoreAddress = "0x3889927F0B5Eb1a02C6E2C20b39a1B14A6a98F9b";
   } else {
-    // Para local - deployar nuestro mock
+    // Para local / deploya mock propio
     console.log("Desplegando SemaphoreMock para desarrollo...");
     const SemaphoreMock = await ethers.getContractFactory("SemaphoreMock");
     const semaphoreMock = await SemaphoreMock.deploy();
@@ -23,21 +23,21 @@ async function main() {
     console.log("SemaphoreMock:", semaphoreAddress);
   }
 
-  // 1. Desplegar MockUSDC
+  // 1 Desplega MockUSDC
   console.log("\n1. Desplegando MockUSDC...");
   const MockUSDC = await ethers.getContractFactory("MockUSDC");
   const usdc = await MockUSDC.deploy();
   await usdc.deployed();
   console.log("MockUSDC:", usdc.address);
 
-  // 2. Desplegar Factory
+  // 2 Desplega Factory
   console.log("\n2. Desplegando TrustCircleFactory...");
   const TrustCircleFactory = await ethers.getContractFactory("TrustCircleFactory");
   const factory = await TrustCircleFactory.deploy(semaphoreAddress);
   await factory.deployed();
   console.log("TrustCircleFactory:", factory.address);
 
-  // 3. Crear círculo
+  // 3 Crea círculo
   console.log("\n3. Creando círculo con votación privada...");
   
   const policyEnd = Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60);
@@ -59,7 +59,7 @@ async function main() {
   console.log("Círculo creado en:", circleAddress);
   console.log("Usando Semaphore real:", useRealSemaphore);
 
-  // Inicializar grupo Semaphore
+  // Inicializa grupo Semaphore
   console.log("\n4. Inicializando grupo Semaphore...");
   const trustCircle = await ethers.getContractAt("TrustCircleSemaphore", circleAddress);
   const initTx = await trustCircle.initializeSemaphoreGroup();

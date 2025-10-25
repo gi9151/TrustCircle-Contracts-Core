@@ -9,6 +9,8 @@ contract TrustCircleSemaphore is TrustCircleMain {
     uint256 public groupId;
     bool public useRealSemaphore;
 
+    uint256 public zkVoteCounter;
+
     event MemberAddedToGroup(uint256 identityCommitment);
     event ZKVote(uint256 indexed claimId, uint256 nullifierHash, bool approved);
     event SemaphoreInitialized(bool useRealSemaphore, uint256 groupId);
@@ -22,11 +24,11 @@ contract TrustCircleSemaphore is TrustCircleMain {
         uint256 _perClaimCap,
         uint256 _coverageLimitTotal,
         bool _useRealSemaphore
-    ) TrustCircleMain(_admin, _asset, _policyEnd, _coPayBps, _perClaimCap, _coverageLimitTotal) {
+    ) TrustCircleMain(_admin, _asset, _policyEnd, _coPayBps, _perClaimCap, _coverageLimitTotal, _semaphoreAddress) {
         semaphore = ISemaphore(_semaphoreAddress);
         useRealSemaphore = _useRealSemaphore;
         
-        // Usa un ID temporal para referencia
+        // Crea ID único para el grupo de este círculo
         groupId = uint256(keccak256(abi.encodePacked(_admin, block.timestamp, _asset)));
         
         emit SemaphoreInitialized(_useRealSemaphore, groupId);
@@ -34,12 +36,12 @@ contract TrustCircleSemaphore is TrustCircleMain {
 
     function initializeSemaphoreGroup() external onlyOwner returns (uint256) {
         if (useRealSemaphore) {
-            // Crea grupo y obtiene el ID real
+            // Semaphore obtiene ID real
             uint256 realGroupId = semaphore.createGroup(address(this));
             groupId = realGroupId;
             return realGroupId;
         } else {
-            // Para mock, mantenemos el ID temporal
+            // Para mock, mantiene el ID temporal
             return groupId;
         }
     }
@@ -50,7 +52,6 @@ contract TrustCircleSemaphore is TrustCircleMain {
         if (useRealSemaphore) {
             semaphore.addMember(groupId, identityCommitment);
         }
-        // Solo para simulación
         
         emit MemberAddedToGroup(identityCommitment);
     }
@@ -74,7 +75,7 @@ contract TrustCircleSemaphore is TrustCircleMain {
         uint256 scope = claimId;
 
         if (useRealSemaphore) {
-            // Usa la nueva estructura SemaphoreProof
+            // Semaphore 
             ISemaphore.SemaphoreProof memory proof = ISemaphore.SemaphoreProof({
                 merkleTreeDepth: merkleTreeDepth,
                 merkleTreeRoot: merkleTreeRoot,
@@ -86,9 +87,10 @@ contract TrustCircleSemaphore is TrustCircleMain {
 
             semaphore.validateProof(groupId, proof);
         }
+        // Para mock (no necesita verificación real)
 
         usedNullifiers[nullifier] = true;
-        zkVoteCounter++;
+        zkVoteCounter++; 
 
         if (approve) {
             claim.votesFor++;
@@ -128,7 +130,7 @@ contract TrustCircleSemaphore is TrustCircleMain {
     }
 
     function getZKStats() external view returns (uint256 zkVotes, uint256 totalNullifiers) {
-        return (zkVoteCounter, zkVoteCounter);
+        return (zkVoteCounter, zkVoteCounter); 
     }
     
     function switchToRealSemaphore(address newSemaphoreAddress) external onlyOwner {
@@ -136,7 +138,7 @@ contract TrustCircleSemaphore is TrustCircleMain {
         useRealSemaphore = true;
     }
 
-    // Para obtener el groupId real 
+   
     function getSemaphoreGroupId() external view returns (uint256) {
         return groupId;
     }

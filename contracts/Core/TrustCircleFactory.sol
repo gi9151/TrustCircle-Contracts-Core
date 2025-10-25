@@ -27,14 +27,14 @@ contract TrustCircleFactory {
         
         if (withSemaphore) {
             circle = address(new TrustCircleSemaphore(
-                semaphoreAddress,    
-                admin,              
-                asset,               
-                policyEnd,         
-                coPayBps,           
-                perClaimCap,        
-                coverageLimitTotal, 
-                false               
+                semaphoreAddress,    // _semaphoreAddress
+                admin,              // _admin
+                asset,              // _asset  
+                policyEnd,          // _policyEnd
+                coPayBps,           // _coPayBps
+                perClaimCap,        // _perClaimCap
+                coverageLimitTotal, // _coverageLimitTotal
+                false               // _useRealSemaphore
             ));
         } else {
             circle = address(new TrustCircleMain(
@@ -43,7 +43,8 @@ contract TrustCircleFactory {
                 policyEnd,
                 coPayBps,
                 perClaimCap,
-                coverageLimitTotal
+                coverageLimitTotal,
+                semaphoreAddress    
             ));
         }
         

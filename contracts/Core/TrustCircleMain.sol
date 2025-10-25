@@ -5,15 +5,19 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
+import "./interfaces/ICrossCircleVerifiers.sol";
 
 /**
- * @title TrustCircle
- * @dev Contrato  para gestión de miembros y reclamos
+ * @title TrustCircleMain
+ * @dev Governanza básica y límites de miembros
  */
 contract TrustCircleMain is ReentrancyGuard, Ownable {
     using Counters for Counters.Counter;
 
-    // Estructuras
+    // Límites de miembros
+    uint256 public constant MIN_MEMBERS = 3;
+    uint256 public constant MAX_MEMBERS = 10;
+
     struct Member {
         bool isActive;
         uint256 contribution;
@@ -25,19 +29,25 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         address claimant;
         uint256 amount;
         uint256 openedAt;
-        uint8 status; // 0 = pending, 1 = approved, 2 = rejected
+        uint8 status;
         uint256 votesFor;
         uint256 votesAgainst;
         string evidence;
+        bool externalVerificationRequired;
     }
 
-    // Variables básicas
+    // Variables 
     IERC20 public asset;
     uint256 public policyEnd;
     uint256 public coPayBps;
     uint256 public perClaimCap;
     uint256 public coverageLimitTotal;
     uint256 public minContribution = 100 * 10**6;
+
+    // Governance 
+    uint256 public quorumBps = 5000;  // 50%
+    uint256 public approvalBps = 7000; // 70%
+    ICrossCircleVerifiers public verifierPool;
 
     // Contadores
     Counters.Counter private _claimIds;
@@ -48,16 +58,12 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
 
     uint256 public totalMembers;
     uint256 public totalPool;
-    uint256 public totalContributions;
-    uint256 public zkVoteCounter;
 
     // Eventos
     event MemberJoined(address indexed member, uint256 amount, uint256 zkIdentityCommitment);
-    event ContributionMade(address indexed member, uint256 amount);
     event ClaimOpened(uint256 indexed claimId, address indexed claimant, uint256 amount);
     event ClaimVoted(uint256 indexed claimId, address indexed voter, bool approved);
     event ClaimProcessed(uint256 indexed claimId, uint8 status);
-    event ZKIdentityRegistered(address indexed member, uint256 commitment);
 
     // Modifiers
     modifier policyActive() {
@@ -70,25 +76,26 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         _;
     }
 
- 
-    // Constructor
     constructor(
         address _admin,
         address _asset,
         uint256 _policyEnd,
         uint256 _coPayBps,
         uint256 _perClaimCap,
-        uint256 _coverageLimitTotal
+        uint256 _coverageLimitTotal,
+        address _verifierPool
     ) {
         asset = IERC20(_asset);
         policyEnd = _policyEnd;
         coPayBps = _coPayBps;
         perClaimCap = _perClaimCap;
         coverageLimitTotal = _coverageLimitTotal;
+        verifierPool = ICrossCircleVerifiers(_verifierPool);
         _transferOwnership(_admin);
     }
 
-    // Funciones de miembros
+    //  FUNCIONES ESENCIALES 
+
     function join(uint256 amount, uint256 zkCommitment) 
         public  
         policyActive 
@@ -96,6 +103,7 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
     {
         require(!members[msg.sender].isActive, "Already a member");
         require(amount >= minContribution, "Amount below minimum");
+        require(totalMembers < MAX_MEMBERS, "Circle is full");
 
         bool success = asset.transferFrom(msg.sender, address(this), amount);
         require(success, "Transfer failed");
@@ -110,48 +118,10 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         memberList.push(msg.sender);
         totalMembers++;
         totalPool += amount;
-        totalContributions += amount;
 
         emit MemberJoined(msg.sender, amount, zkCommitment);
-
-        if (zkCommitment != 0) {
-            emit ZKIdentityRegistered(msg.sender, zkCommitment);
-        }
     }
 
-    function contribute(uint256 amount) 
-        external 
-        onlyMember 
-        policyActive 
-        nonReentrant 
-    {
-        require(amount > 0, "Amount must be > 0");
-
-        bool success = asset.transferFrom(msg.sender, address(this), amount);
-        require(success, "Transfer failed");
-
-        members[msg.sender].contribution += amount;
-        totalPool += amount;
-        totalContributions += amount;
-
-        emit ContributionMade(msg.sender, amount);
-    }
-
-    function registerZKIdentity(uint256 zkCommitment) external onlyMember {
-        require(zkCommitment != 0, "Invalid commitment");
-        members[msg.sender].zkIdentityCommitment = zkCommitment;
-        emit ZKIdentityRegistered(msg.sender, zkCommitment);
-    }
-
-    function getMemberCount() external view returns (uint256) {
-        return memberList.length;
-    }
-
-    function getMember(address member) external view returns (Member memory) {
-        return members[member];
-    }
-
-    // Funciones de reclamos
     function openClaim(uint256 amount, string memory evidence) 
         external 
         onlyMember 
@@ -159,9 +129,12 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         returns (uint256) 
     {
         require(amount <= perClaimCap, "Exceeds per-claim cap");
+        require(totalMembers >= MIN_MEMBERS, "Not enough members");
 
         _claimIds.increment();
         uint256 claimId = _claimIds.current();
+
+        bool needsExternalVerification = amount > 100 * 10**6;
 
         claims[claimId] = Claim({
             claimant: msg.sender,
@@ -170,8 +143,13 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
             status: 0,
             votesFor: 0,
             votesAgainst: 0,
-            evidence: evidence
+            evidence: evidence,
+            externalVerificationRequired: needsExternalVerification
         });
+
+        if (needsExternalVerification && address(verifierPool) != address(0)) {
+            verifierPool.assignVerifiers(claimId, amount, msg.sender);
+        }
 
         emit ClaimOpened(claimId, msg.sender, amount);
         return claimId;
@@ -194,23 +172,74 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         Claim storage claim = claims[claimId];
         require(claim.status == 0, "Claim already processed");
 
-        if (claim.votesFor > claim.votesAgainst) {
-            claim.status = 1;
-            uint256 copayAmount = (claim.amount * coPayBps) / 10000;
-            uint256 payoutAmount = claim.amount - copayAmount;
+        // Verifica quorum básico
+        uint256 totalVotes = claim.votesFor + claim.votesAgainst;
+        require(totalVotes >= (totalMembers * quorumBps) / 10000, "No quorum");
 
-            bool success = asset.transfer(claim.claimant, payoutAmount);
-            require(success, "Transfer failed");
+        uint256 requiredApproval = (totalVotes * approvalBps) / 10000; 
 
-            totalPool -= payoutAmount;
-        } else {
-            claim.status = 2;
+        // Verifica aprobación
+        require(claim.votesFor >= (totalVotes * approvalBps) / 10000, "Not approved");
+
+        // Verificación externa 
+        if (claim.externalVerificationRequired && address(verifierPool) != address(0)) {
+            require(
+                verifierPool.hasExternalVerification(claimId),
+                "External verification required"
+            );
         }
+
+        // Procesa pago
+        claim.status = 1;
+        uint256 copayAmount = (claim.amount * coPayBps) / 10000;
+        uint256 payoutAmount = claim.amount - copayAmount;
+
+        bool success = asset.transfer(claim.claimant, payoutAmount);
+        require(success, "Transfer failed");
+
+        totalPool -= payoutAmount;
 
         emit ClaimProcessed(claimId, claim.status);
     }
 
+    //  FUNCIONES DE GOVERNANCE 
+
+    function updateGovernanceConfig(uint256 _quorumBps, uint256 _approvalBps) external onlyOwner {
+        require(_quorumBps <= 10000, "Invalid quorum");
+        require(_approvalBps <= 10000, "Invalid approval");
+        quorumBps = _quorumBps;
+        approvalBps = _approvalBps;
+    }
+
+    //  GETTERS ESENCIALES 
+
     function getClaim(uint256 claimId) external view returns (Claim memory) {
         return claims[claimId];
+    }
+
+    function getMember(address member) external view returns (Member memory) {
+        return members[member];
+    }
+
+    function getActiveMembersCount() external view returns (uint256) {
+        uint256 count = 0;
+        for (uint i = 0; i < memberList.length; i++) {
+            if (members[memberList[i]].isActive) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    function getMembersLimit() external pure returns (uint256 min, uint256 max) {
+        return (MIN_MEMBERS, MAX_MEMBERS);
+    }
+
+    function canAcceptNewMembers() external view returns (bool) {
+        return totalMembers < MAX_MEMBERS;
+    }
+
+    function hasMinimumMembers() external view returns (bool) {
+        return totalMembers >= MIN_MEMBERS;
     }
 }

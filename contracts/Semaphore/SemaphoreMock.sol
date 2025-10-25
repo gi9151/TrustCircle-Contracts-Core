@@ -13,7 +13,7 @@ contract SemaphoreMock is ISemaphore {
     
     event GroupCreated(uint256 indexed groupId, address admin);
     event MemberAdded(uint256 indexed groupId, uint256 identityCommitment);
-    event ProofValidatedMock(uint256 indexed groupId, uint256 nullifier); // ← CAMBIÉ EL NOMBRE
+    event ProofValidatedMock(uint256 indexed groupId, uint256 nullifier); 
 
     function groupCounter() external view override returns (uint256) {
         return currentGroupCounter;
