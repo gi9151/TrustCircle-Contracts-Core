@@ -27,8 +27,11 @@
   "author": "Ingrid Favio",
   "license": "MIT",
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^1.0.0",
-    "hardhat": "^2.19.0"
+    "@nomicfoundation/hardhat-toolbox": "^1.0.2",
+    "@types/node": "^24.9.1",
+    "hardhat": "^2.19.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^4.9.6",

@@ -9,8 +9,17 @@ import "./interfaces/ICrossCircleVerifiers.sol";
 
 /**
  * @title TrustCircleMain
- * @dev Governanza básica y límites de miembros
+ * @dev Gobernanza básica, límites de miembros y verificaciones externas por umbrales.
+ *
+ * Reglas de aprobaciones externas (asumiendo token con 6 decimales, p.ej. mPYUSD):
+ *  - amount <= capInternal  (por defecto 100e6)  -> 0 verificaciones externas
+ *  - amount <= capOneExt    (por defecto 500e6)  -> 1 verificación externa
+ *  - amount >  capOneExt                         -> 2 verificaciones externas
  */
+interface IVerifierRegistry {
+    function isVerifier(address who) external view returns (bool);
+}
+
 contract TrustCircleMain is ReentrancyGuard, Ownable {
     using Counters for Counters.Counter;
 
@@ -29,27 +38,37 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         address claimant;
         uint256 amount;
         uint256 openedAt;
-        uint8 status;
+        uint8 status; // 0=PENDING, 1=PAID/FINALIZED, 2=REJECTED
         uint256 votesFor;
         uint256 votesAgainst;
-        string evidence;
-        bool externalVerificationRequired;
+        string evidence; // IPFS CID u otro
+        bool externalVerificationRequired; // compatibilidad con flujo previo
+        uint8 extApprovals; //  aprobaciones externas acumuladas
     }
 
-    // Variables 
+    // Variables
     IERC20 public asset;
     uint256 public policyEnd;
     uint256 public coPayBps;
     uint256 public perClaimCap;
     uint256 public coverageLimitTotal;
-    uint256 public minContribution = 100 * 10**6;
+    uint256 public minContribution = 100 * 10**6; // 100 con 6 decimales
 
-    // Governance 
-    uint256 public quorumBps = 5000;  // 50%
+    // Governance
+    uint256 public quorumBps = 5000;   // 50%
     uint256 public approvalBps = 7000; // 70%
+
+    // Pool de verificación externa (existente, opcional)
     ICrossCircleVerifiers public verifierPool;
 
-    // Contadores
+    //  Registro simple de verificadores externos (lista blanca)
+    IVerifierRegistry public verifierRegistry;
+
+    //  Umbrales (6 decimales)
+    uint256 public capInternal = 100 * 10**6; // <=100 → 0 externas
+    uint256 public capOneExt  = 500 * 10**6;  // <=500 → 1 externa; >500 → 2
+
+    // Contadores y storage
     Counters.Counter private _claimIds;
     mapping(address => Member) public members;
     mapping(uint256 => Claim) public claims;
@@ -59,11 +78,15 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
     uint256 public totalMembers;
     uint256 public totalPool;
 
+    // Seguimiento de aprobaciones externas por claimId y verificador
+    mapping(uint256 => mapping(address => bool)) public extApprovedBy;
+
     // Eventos
     event MemberJoined(address indexed member, uint256 amount, uint256 zkIdentityCommitment);
     event ClaimOpened(uint256 indexed claimId, address indexed claimant, uint256 amount);
     event ClaimVoted(uint256 indexed claimId, address indexed voter, bool approved);
     event ClaimProcessed(uint256 indexed claimId, uint8 status);
+    event ExternalApproved(uint256 indexed claimId, address indexed verifier, uint8 totalExtApprovals);
 
     // Modifiers
     modifier policyActive() {
@@ -94,12 +117,13 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         _transferOwnership(_admin);
     }
 
-    //  FUNCIONES ESENCIALES 
-
-    function join(uint256 amount, uint256 zkCommitment) 
-        public  
-        policyActive 
-        nonReentrant 
+    
+    //        JOIN / MEMBER
+    
+    function join(uint256 amount, uint256 zkCommitment)
+        public
+        policyActive
+        nonReentrant
     {
         require(!members[msg.sender].isActive, "Already a member");
         require(amount >= 1 * 10**6, "Amount below minimum");
@@ -122,11 +146,14 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         emit MemberJoined(msg.sender, amount, zkCommitment);
     }
 
-    function openClaim(uint256 amount, string memory evidence) 
-        external 
-        onlyMember 
-        policyActive 
-        returns (uint256) 
+    
+    //         CLAIMS
+    
+    function openClaim(uint256 amount, string memory evidence)
+        external
+        onlyMember
+        policyActive
+        returns (uint256)
     {
         require(amount <= perClaimCap, "Exceeds per-claim cap");
         require(totalMembers >= MIN_MEMBERS, "Not enough members");
@@ -134,7 +161,7 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         _claimIds.increment();
         uint256 claimId = _claimIds.current();
 
-        bool needsExternalVerification = amount > 100 * 10**6;
+        bool needsExternal = (amount > capInternal);
 
         claims[claimId] = Claim({
             claimant: msg.sender,
@@ -144,10 +171,12 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
             votesFor: 0,
             votesAgainst: 0,
             evidence: evidence,
-            externalVerificationRequired: needsExternalVerification
+            externalVerificationRequired: needsExternal,
+            extApprovals: 0
         });
 
-        if (needsExternalVerification && address(verifierPool) != address(0)) {
+        // Compatibilidad con asignación externa previa (opcional)
+        if (needsExternal && address(verifierPool) != address(0)) {
             verifierPool.assignVerifiers(claimId, amount, msg.sender);
         }
 
@@ -168,28 +197,57 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         emit ClaimVoted(claimId, msg.sender, approve);
     }
 
+    
+    //  EXTERNAL VERIFICATIONS
+    
+
+    /// @notice Devuelve cuántas aprobaciones externas requiere un monto.
+    function requiredExternalApprovals(uint256 amount) public view returns (uint8) {
+        if (amount <= capInternal) return 0;
+        if (amount <= capOneExt)   return 1;
+        return 2;
+    }
+
+    /// @notice Un verificador externo aprueba un claim específico.
+    function externalApprove(uint256 claimId) external {
+        Claim storage c = claims[claimId];
+        require(c.status == 0, "Claim not pending");
+        require(address(verifierRegistry) != address(0), "no registry");
+        require(verifierRegistry.isVerifier(msg.sender), "not verifier");
+        require(!extApprovedBy[claimId][msg.sender], "already approved");
+
+        extApprovedBy[claimId][msg.sender] = true;
+        c.extApprovals += 1;
+
+        emit ExternalApproved(claimId, msg.sender, c.extApprovals);
+    }
+
+    
+    //     PROCESS / PAYOUT
+    
     function processClaim(uint256 claimId) external onlyOwner nonReentrant {
         Claim storage claim = claims[claimId];
         require(claim.status == 0, "Claim already processed");
 
-        // Verifica quorum básico
+        // 1) Verifica quorum básico
         uint256 totalVotes = claim.votesFor + claim.votesAgainst;
         require(totalVotes >= (totalMembers * quorumBps) / 10000, "No quorum");
 
-        uint256 requiredApproval = (totalVotes * approvalBps) / 10000; 
-
-        // Verifica aprobación
+        // 2) Verifica aprobación interna
         require(claim.votesFor >= (totalVotes * approvalBps) / 10000, "Not approved");
 
-        // Verificación externa 
+        // 3) Verificación externa por umbral
+        uint8 need = requiredExternalApprovals(claim.amount);
+
+        // Compatibilidad: si usas un pool externo que marca verificación “global”
         if (claim.externalVerificationRequired && address(verifierPool) != address(0)) {
-            require(
-                verifierPool.hasExternalVerification(claimId),
-                "External verification required"
-            );
+            require(verifierPool.hasExternalVerification(claimId), "External verification required");
         }
 
-        // Procesa pago
+        // Requisito de conteo propio (independiente del pool)
+        require(claim.extApprovals >= need, "Need more external approvals");
+
+        // 4) Payout con copago
         claim.status = 1;
         uint256 copayAmount = (claim.amount * coPayBps) / 10000;
         uint256 payoutAmount = claim.amount - copayAmount;
@@ -202,8 +260,9 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         emit ClaimProcessed(claimId, claim.status);
     }
 
-    //  FUNCIONES DE GOVERNANCE 
-
+    
+    //        GOVERNANCE
+    
     function updateGovernanceConfig(uint256 _quorumBps, uint256 _approvalBps) external onlyOwner {
         require(_quorumBps <= 10000, "Invalid quorum");
         require(_approvalBps <= 10000, "Invalid approval");
@@ -211,8 +270,20 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         approvalBps = _approvalBps;
     }
 
-    //  GETTERS ESENCIALES 
+    //  setear registro de verificadores
+    function setVerifierRegistry(address reg) external onlyOwner {
+        verifierRegistry = IVerifierRegistry(reg);
+    }
 
+    //  setear caps/umbrales
+    function setCaps(uint256 _capInternal, uint256 _capOneExt) external onlyOwner {
+        require(_capInternal < _capOneExt, "caps order");
+        capInternal = _capInternal;
+        capOneExt   = _capOneExt;
+    }
+
+    
+    //          GETTERS
     function getClaim(uint256 claimId) external view returns (Claim memory) {
         return claims[claimId];
     }

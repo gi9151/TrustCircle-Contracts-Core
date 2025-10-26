@@ -43,7 +43,7 @@ async function demo() {
   console.log("   - User1 tiene accidente con su moto");
   console.log("   - Abre claim por 1 PYUSD (dentro del límite)\n");
   
-  // Usar 1 PYUSD que está dentro del límite de 1.0 PYUSD
+  
   await trustCircle.connect(user1).openClaim(ethers.utils.parseUnits("1", 6), "motorcycle-accident.jpg");
   
   console.log(" VOTACIÓN DEMOCRÁTICA...");

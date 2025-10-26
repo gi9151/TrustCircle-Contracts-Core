@@ -1,19 +1,31 @@
 require("@nomicfoundation/hardhat-toolbox");
 require("dotenv").config();
 
+const { RPC_BASE_SEPOLIA, PRIVATE_KEY, ETHERSCAN_API_KEY } = process.env;
+
+/** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
-  solidity: "0.8.23",
+  solidity: {
+    version: "0.8.23",
+    settings: {
+      optimizer: {
+        enabled: true,
+        runs: 200,
+      },
+      viaIR: true,
+    },
+  },
   networks: {
-    sepolia: {
-      url: process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      chainId: 11155111,
+    baseSepolia: {
+      url: RPC_BASE_SEPOLIA || "https://base-sepolia-rpc.publicnode.com",
+      accounts: PRIVATE_KEY ? [PRIVATE_KEY] : [],
+      chainId: 84532,
     },
     localhost: {
-      url: "http://127.0.0.1:8545"
-    }
+      url: "http://127.0.0.1:8545",
+    },
   },
   etherscan: {
-    apiKey: process.env.ETHERSCAN_API_KEY
-  }
-};  
+    apiKey: ETHERSCAN_API_KEY || "",
+  },
+};
