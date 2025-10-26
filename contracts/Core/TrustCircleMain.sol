@@ -102,7 +102,7 @@ contract TrustCircleMain is ReentrancyGuard, Ownable {
         nonReentrant 
     {
         require(!members[msg.sender].isActive, "Already a member");
-        require(amount >= minContribution, "Amount below minimum");
+        require(amount >= 1 * 10**6, "Amount below minimum");
         require(totalMembers < MAX_MEMBERS, "Circle is full");
 
         bool success = asset.transferFrom(msg.sender, address(this), amount);
